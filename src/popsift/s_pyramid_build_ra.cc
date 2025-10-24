@@ -57,26 +57,20 @@ void Pyramid::horiz_from_input_image( const Config& conf, std::shared_ptr<ImageB
     POP_INFO2( conf.silent(), "  dst: " << dst_w << "x" << dst_h << "x" << dst_z << " layers, pitch=" << dst_pitch );
     POP_INFO2( conf.silent(), "  src: " << src_w << "x" << src_h << ", pitch=" << src_pitch );
 
-    // Get Gaussian filter parameters
     const int span = h_gauss.dd.span[0];
     
-    // Copy filter to host memory
-    std::vector<float> filter_host(span + 1);
-    for(int i = 0; i <= span; i++) {
-        filter_host[i] = h_gauss.dd.filter[i];
-    }
-
     // Get SYCL queue from octave
     sycl::queue& queue = oct_obj.getQueue();
 
     POP_INFO2( conf.silent(), "Submitting horiz_from_input_image SYCL kernel..." );
 
     try {
-        // FIX: src is HOST memory, need to copy to device!
-        float* src_host_ptr = src.getHostPtr();  // Get host pointer
+        // Get host and device pointers
+        float* src_host_ptr = src.getHostPtr();
         float* dst_device_ptr = dst.getDevicePtr();
+        float* dst_host_ptr = dst.getHostPtr();  // ADD: Need this for copy-back
 
-        if (!src_host_ptr || !dst_device_ptr) {
+        if (!src_host_ptr || !dst_device_ptr || !dst_host_ptr) {
             throw std::runtime_error("NULL pointer in horiz_from_input_image");
         }
 
@@ -89,19 +83,22 @@ void Pyramid::horiz_from_input_image( const Config& conf, std::shared_ptr<ImageB
         // Allocate device memory for src
         POP_INFO2( conf.silent(), "  Allocating device memory for src..." );
         float* src_device_ptr = sycl::malloc_device<float>(src_total_floats, queue);
-        
-        // Copy src from host to device
-        POP_INFO2( conf.silent(), "  Copying src to device..." );
-        queue.memcpy(src_device_ptr, src_host_ptr, src_total_floats * sizeof(float)).wait();
-
         // Allocate filter on device
         float* d_filter = sycl::malloc_device<float>(span + 1, queue);
-        queue.memcpy(d_filter, filter_host.data(), (span + 1) * sizeof(float)).wait();
+        
+        // Copy src from host to device without blocking on the host
+        POP_INFO2( conf.silent(), "  Copying src to device..." );
+        sycl::event e_src = queue.memcpy(src_device_ptr, src_host_ptr, src_total_floats * sizeof(float));
+
+        sycl::event e_flt = queue.memcpy(d_filter, h_gauss.dd.filter, (span + 1) * sizeof(float));
 
         POP_INFO2( conf.silent(), "  ✓ Data uploaded, submitting kernel..." );
 
         // Launch kernel
         auto event = queue.submit([&](sycl::handler& cgh) {
+            
+            cgh.depends_on({e_src, e_flt});
+            
             const int c_dst_w = dst_w;
             const int c_dst_h = dst_h;
             const int c_src_w = src_w;
@@ -167,6 +164,12 @@ void Pyramid::horiz_from_input_image( const Config& conf, std::shared_ptr<ImageB
         });
 
         event.wait();
+
+        // CRITICAL FIX: Copy result back to host memory
+        // Only copy layer 0 (the layer we wrote to)
+        const int layer0_size = dst_pitch * dst_h * sizeof(float);
+        POP_INFO2( conf.silent(), "  Copying layer 0 back to host (" << layer0_size << " bytes)..." );
+        //queue.memcpy(dst_host_ptr, dst_device_ptr, layer0_size).wait();
 
         // Free device memory
         sycl::free(src_device_ptr, queue);

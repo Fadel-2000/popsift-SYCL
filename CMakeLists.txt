@@ -3,27 +3,44 @@ cmake_minimum_required(VERSION 3.24)
 project(PopSift VERSION 1.0.0 LANGUAGES CXX)
 
 # ============================================================================
-# CRITICAL: Force Intel DPC++ Compiler Check
+# Compiler Check - Accept Intel icpx OR custom LLVM with SYCL support
 # ============================================================================
-if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM" AND 
-   NOT CMAKE_CXX_COMPILER MATCHES "icpx" AND 
-   NOT CMAKE_CXX_COMPILER MATCHES "dpcpp")
+if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM" OR 
+        CMAKE_CXX_COMPILER MATCHES "icpx" OR 
+        CMAKE_CXX_COMPILER MATCHES "dpcpp" OR
+        (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER MATCHES "llvm")))
     message(FATAL_ERROR 
         "\n=================================================================\n"
-        "ERROR: This project requires Intel DPC++ compiler (icpx)!\n"
+        "ERROR: This project requires SYCL compiler!\n"
         "Current compiler: ${CMAKE_CXX_COMPILER_ID} (${CMAKE_CXX_COMPILER})\n\n"
-        "Please reconfigure with:\n"
-        "  cmake .. -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx\n"
+        "Please use one of:\n"
+        "  Intel oneAPI:  cmake .. -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx\n"
+        "  Custom LLVM:   cmake .. -DCMAKE_CXX_COMPILER=$HOME/llvm/build/bin/clang++\n"
         "=================================================================\n")
 endif()
 
-message(STATUS "✓ Using Intel DPC++ compiler: ${CMAKE_CXX_COMPILER}")
+message(STATUS "✓ Using SYCL compiler: ${CMAKE_CXX_COMPILER}")
+message(STATUS "  Compiler ID: ${CMAKE_CXX_COMPILER_ID}")
 
 # ============================================================================
 # SYCL Compiler Setup (BEFORE C++ STANDARD)
 # ============================================================================
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsycl")
+
+# Add NVIDIA GPU target (CUDA backend) - only if using custom LLVM
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER MATCHES "llvm")
+    message(STATUS "Configuring SYCL for NVIDIA RTX 4050 Laptop GPU (sm_89)...")
+    
+    # Add NVIDIA GPU target
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl-targets=nvptx64-nvidia-cuda")
+    
+    # Target RTX 4050 Laptop (Ada Lovelace, sm_89)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_89")
+    
+    # Linker flags
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsycl-targets=nvptx64-nvidia-cuda")
+endif()
 
 # ============================================================================
 # C++ Standard - Required for SYCL (MUST BE AFTER -fsycl FLAG)
@@ -35,13 +52,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Add explicit -std=c++17 flag AFTER -fsycl
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
 
+# ============================================================================
+# Project Configuration
+# ============================================================================
 # Set build path
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 
-option(PopSift_BUILD_EXAMPLES "Build PopSift applications."  ON)
-option(PopSift_BUILD_DOCS "Build PopSift documentation."  OFF)
-option(PopSift_ERRCHK_AFTER_KERNEL     "Synchronize and check error after every kernel." OFF)
+option(PopSift_BUILD_EXAMPLES "Build PopSift applications." ON)
+option(PopSift_BUILD_DOCS "Build PopSift documentation." OFF)
+option(PopSift_ERRCHK_AFTER_KERNEL "Synchronize and check error after every kernel." OFF)
 option(PopSift_USE_POSITION_INDEPENDENT_CODE "Generate position independent code." ON)
 option(PopSift_USE_GRID_FILTER "Switch off grid filtering to massively reduce compile time while debugging other things." ON)
 option(PopSift_USE_TEST_CMD "Add testing step for functional verification" OFF)
@@ -83,11 +103,14 @@ find_package(Threads REQUIRED)
 
 if(NOT PopSift_USE_GRID_FILTER)
   message(STATUS "Disabling grid filter compilation")
-  set(DISABLE_GRID_FILTER   1)
+  set(DISABLE_GRID_FILTER 1)
 else()
-  set(DISABLE_GRID_FILTER   0)
+  set(DISABLE_GRID_FILTER 0)
 endif()
 
+# ============================================================================
+# Add subdirectories
+# ============================================================================
 add_subdirectory(src)
 
 if(PopSift_BUILD_DOCS)
@@ -111,28 +134,29 @@ CONFIGURE_FILE(
 ADD_CUSTOM_TARGET(uninstall
   "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/cmake_uninstall.cmake")
 
-######################################
+# ============================================================================
 # SUMMARY
-######################################
+# ============================================================================
 message("\n")
 message("******************************************")
 message("Building configuration:\n")
-message(STATUS "PopSift version: " ${PROJECT_VERSION})
+message(STATUS "PopSift version: ${PROJECT_VERSION}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
-message(STATUS "Build type: " ${CMAKE_BUILD_TYPE})
-message(STATUS "C++ Standard: " ${CMAKE_CXX_STANDARD})
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "CXX Flags: ${CMAKE_CXX_FLAGS}")
-message(STATUS "Build Shared libs: " ${BUILD_SHARED_LIBS})
-message(STATUS "Build examples: " ${PopSift_BUILD_EXAMPLES})
-message(STATUS "Build documentation: " ${PopSift_BUILD_DOCS})
-message(STATUS "Generate position independent code: " ${CMAKE_POSITION_INDEPENDENT_CODE})
-message(STATUS "Synchronize and check error after every kernel: " ${PopSift_ERRCHK_AFTER_KERNEL})
-message(STATUS "Grid filtering: " ${PopSift_USE_GRID_FILTER})
-message(STATUS "Install path: " ${CMAKE_INSTALL_PREFIX})
-message(STATUS "Testing step: " ${PopSift_USE_TEST_CMD})
+message(STATUS "Linker Flags: ${CMAKE_EXE_LINKER_FLAGS}")
+message(STATUS "Build Shared libs: ${BUILD_SHARED_LIBS}")
+message(STATUS "Build examples: ${PopSift_BUILD_EXAMPLES}")
+message(STATUS "Build documentation: ${PopSift_BUILD_DOCS}")
+message(STATUS "Generate position independent code: ${CMAKE_POSITION_INDEPENDENT_CODE}")
+message(STATUS "Synchronize and check error after every kernel: ${PopSift_ERRCHK_AFTER_KERNEL}")
+message(STATUS "Grid filtering: ${PopSift_USE_GRID_FILTER}")
+message(STATUS "Install path: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "Testing step: ${PopSift_USE_TEST_CMD}")
 
 if(PopSift_USE_TEST_CMD)
-  message(STATUS "Path for test input: " ${PopSift_TESTFILE_PATH})
+  message(STATUS "Path for test input: ${PopSift_TESTFILE_PATH}")
 endif()
 message("\n******************************************")
 message("\n")

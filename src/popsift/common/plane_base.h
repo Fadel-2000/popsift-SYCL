@@ -76,6 +76,13 @@ struct PlaneBase
 
     void dealloc( );
 
+        
+    // NEW: Copy device → host
+    void copyDeviceToHost();
+    
+    // NEW: Copy host → device
+    void copyHostToDevice();
+
     // NEW: Get device pointer
     inline void* getDevicePtr() {
         return _plane;
@@ -83,6 +90,10 @@ struct PlaneBase
 
     inline const void* getDevicePtr() const {
         return _plane;
+    }
+
+    inline sycl::queue* getQueue() const {
+        return _queue;
     }
 
     inline void* base() {

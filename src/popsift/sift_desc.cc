@@ -57,9 +57,16 @@ void Pyramid::descriptors( const Config& conf )
     }
 
     if( conf.getUseRootSift() ) {
-        normalize_histogram<NormalizeRootSift>( );
+        for( int i=0; i<dct.ori_total; i++ ) {
+            NormalizeRootSift::normalize( h_desc[i].features );
+        }
     } else {
-        normalize_histogram<NormalizeL2>( );
+        for( int i=0; i<dct.ori_total; i++ ) {
+            NormalizeL2::normalize( h_desc[i].features );
+        }
     }
+    
+    // Copy back to device
+    q.memcpy(dbuf.desc, h_desc.data(), dct.ori_total * sizeof(Descriptor)).wait();
 }
 
